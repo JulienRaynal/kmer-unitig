@@ -5,7 +5,8 @@ import statistics
 from Bio import SeqIO
 from typing import Dict, List
 
-def getFileExtension(path:str) -> str:
+
+def getFileExtension(path: str) -> str:
     """
     Get the extension of a file
 
@@ -28,6 +29,7 @@ def getFileExtension(path:str) -> str:
     file_extension = path.rsplit('.', 1)[-1]
     return formats[file_extension]
 
+
 def getReads(path: str) -> iter:
     """
     Get all the reads from a file
@@ -42,6 +44,7 @@ def getReads(path: str) -> iter:
     # Get the extension of the file
     file_format = getFileExtension(path)
     return SeqIO.parse(path, file_format)
+
 
 def cleanReads(records: iter, outputfile_name: str, min_quality: int = 30, kmer_size: int = 31) -> list:
     """
@@ -64,9 +67,10 @@ def cleanReads(records: iter, outputfile_name: str, min_quality: int = 30, kmer_
     good_reads: list = []
     read_count: int = 0
     for record in records:
+        print(record.letter_annotations["phred_quality"])
         if statistics.mean(record.letter_annotations["phred_quality"]) >= 30:
             good_reads.append(record)
-            read_count += 1 # Doing this as we can't get the length of an iterable
+            read_count += 1  # Doing this as we can't get the length of an iterable
 
     print(f"Found {len(good_reads)} reads with a quality above {min_quality}")
 
@@ -77,6 +81,7 @@ def cleanReads(records: iter, outputfile_name: str, min_quality: int = 30, kmer_
     SeqIO.write(good_reads, outputfile_name, getFileExtension(outputfile_name))
 
     return good_reads
+
 
 def getStats(records: list, kmer_size: int) -> None:
     """
@@ -90,7 +95,7 @@ def getStats(records: list, kmer_size: int) -> None:
         The size of a kmer
     """
     total_length: int = 0
-    
+
     for record in records:
         total_length += len(record.seq)
 
@@ -99,8 +104,9 @@ def getStats(records: list, kmer_size: int) -> None:
       The total number of kmer is: {total_length - kmer_size + 1}\n\
       Theoritical upper bounds of kmers in the reads is: {total_length - len(records) * (kmer_size - 1)}")
 
-    print(f"\nThe coverage is : {total_length/10777}\n\
+    print(f"\nThe coverage is : {total_length / 10777}\n\
           The real number of kmer is : {10777 - kmer_size + 1}")
+
 
 def jellyfish_kmer(output_file: str, kmer_size: int) -> Dict[str, int]:
     """
@@ -152,10 +158,10 @@ def alignSequence(kmer: str, ordered_dict: Dict[str, int], kmer_size):
     possibilities: List[str] = 'A', 'T', 'C', 'G'
     avg_support: int = 0
     stop: bool = False
-    
+
     print(f"Searching the kmer aligning with {kmer} on the right")
     buildUnitig(unitig, ordered_dict, kmer_size)
-    #while (stop == False):
+    # while (stop == False):
     #    suffix = unitig[len(unitig) - kmer_size + 1:]
     #    complementary_strings: List[str] = []
     #    values: List[int] = []
@@ -186,8 +192,8 @@ def alignSequence(kmer: str, ordered_dict: Dict[str, int], kmer_size):
     #        print(f"Added a char to unitig: {unitig}")
     #        avg_support = (avg_support + values[0]) / 2
 
-    #stop = False
-    #while (stop == False):
+    # stop = False
+    # while (stop == False):
     #    prefix = unitig[kmer_size - 1]
     #    complementary_strings: List[str] = []
     #    values: List[int] = 0
@@ -205,25 +211,31 @@ def alignSequence(kmer: str, ordered_dict: Dict[str, int], kmer_size):
     #        unitig = complementary_strings[0][0] + unitig
     #        avg_support = (avg_support + values[0]) / 2
 
-    #print(unitig)
+    # print(unitig)
 
 
-def buildUnitig(unitig: str, ordered_dict: Dict[str,int], kmer_size: int, right_search=True) -> str:
+def buildUnitig(unitig: str, ordered_dict: Dict[str, int], kmer_size: int, right_search=True) -> str:
     stop: bool = False
-    avg_support: int = 0
+    avg_support: float = 0
 
-    while (stop == False):
+    while not stop:
         complementary_chars: List[str] = []
         kmer_counts: List[int] = []
 
-        if right_search is True:  # We get the prefix
+        if right_search is True:  # get the prefix
             substring: str = unitig[len(unitig) - kmer_size + 1:]
-        else:
+        else:  # get the suffix
             substring: str = unitig[:kmer_size - 1]
 
-        findComplementaryKmer(substring, complementary_chars, kmer_counts)
+        reverse_complement_substring: str = computeReverseComplement(substring)
 
-        if (len(complementary_chars) != 1):
+        for char in ['A', 'T', 'C', 'G']:
+            kmer_to_search: str = substring + char if right_search else char + substring
+            reverse_to_search: str = char + reverse_complement_substring if right_search else reverse_complement_substring + char
+            findComplementaryKmer(kmer_to_search, ordered_dict, char, complementary_chars, kmer_counts)
+            findComplementaryKmer(reverse_to_search, ordered_dict, char, complementary_chars, kmer_counts)
+
+        if len(kmer_counts) != 1:
             stop = True
         else:
             unitig = unitig + complementary_chars[0] if right_search else complementary_chars[0] + unitig
@@ -232,22 +244,16 @@ def buildUnitig(unitig: str, ordered_dict: Dict[str,int], kmer_size: int, right_
 
     print(unitig)
 
+def findComplementaryKmer(kmer_to_search: str, ordered_dict: Dict[str, int], char: str,
+                          complementary_chars: List[str], kmer_counts: List[int]):
+    """
+    Manages finding in a dict the occurences of a given kmer and add the data to the right list
+    """
+    kmer_count: int = ordered_dict.get(kmer_to_search)
+    if kmer_count is not None:
+        kmer_counts.append(kmer_count)
+        complementary_chars.append(char)
 
-def findComplementaryKmer(substring: str, complementary_chars: List[str], kmer_counts: List[int]):
-    for char in ['A', 'T', 'C', 'G']:
-        reverse_complement_substring: str = computeReverseComplement(substring)
-
-        kmer_to_search: str = substring + char if right_search else char + substring
-        reverse_to_search: str = char + reverse_complement_substring if right_search else reverse_complement_substring + char
-
-        kmer_count: int = ordered_dict.get(kmer_to_search)
-        if kmer_count is not None:
-            complementary_chars.append(char)
-            kmer_counts.append(kmer_count)
-
-
-
-        
 
 def computeReverseComplement(kmer: str) -> str:
     """
@@ -262,12 +268,12 @@ def computeReverseComplement(kmer: str) -> str:
     -------
     str
     """
-    base_complement = {"A": "T", 
+    base_complement = {"A": "T",
                        "T": "A",
                        "C": "G",
                        "G": "C"}
     reverse: str = kmer[::-1]
-    complement : str = ""
+    complement: str = ""
     for char in reverse:
         complement += base_complement[char]
 
@@ -278,10 +284,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("Kmer Grapher")
     parser.add_argument("--inputfilename", help="The path of the input file", required=True, type=str)
     parser.add_argument("--outputfilename", help="The path for the output file", required=True, type=str)
-    parser.add_argument("--kmersize", help="The size of kmers", choices=range(2,32), required=True, type=int)
+    parser.add_argument("--kmersize", help="The size of kmers", choices=range(2, 32), required=True, type=int)
     parser.add_argument("--minkmercount", help="Minimum count of a kmer to be kept", required=True, type=int)
     parser.add_argument("--minunitiglength", help="Minimum length of the unitig", required=True, type=int)
-    parser.add_argument("--minreadquality", help="The minimum quality a read should have on average", type=int, default=30)
+    parser.add_argument("--minreadquality", help="The minimum quality a read should have on average", type=int,
+                        default=30)
     parser.add_argument("--unitigsize", help="The size of the unitig", type=int, required=True)
 
     args = parser.parse_args()
@@ -292,23 +299,22 @@ if __name__ == "__main__":
     reads: iter = getReads(args.inputfilename)
     reads: list = cleanReads(reads, args.outputfilename, args.minreadquality, args.kmersize)
 
-
     #############################
     #       Creating kmer       #
     #############################
     ordered_dict: Dict[str, int] = jellyfish_kmer(args.outputfilename, args.kmersize)
 
-
     #############################
     #       Building unitig     #
     #############################
-    unitigs: List[Dict[str, int]] = []  # A list containing a dict with as key the full unitig and as value the average kmer count along the path
+    unitigs: List[Dict[
+        str, int]] = []  # A list containing a dict with as key the full unitig and as value the average kmer count along the path
     for i in range(len(list(ordered_dict.keys()))):
         alignSequence(list(ordered_dict.keys())[i], ordered_dict, args.kmersize)
 
-    #d = dict = {
-    #"AAAAAAATCGTTTCGGGATGATGCATAGCAT": 1,
-    #"AAAAAATCGTTTCGGGATGATGCATAGCATA": 1,
-    #"AAAAATCGTTTCGGGATGATGCATAGCATAT": 1,
+    # d = dict = {
+    # "AAAAAAATCGTTTCGGGATGATGCATAGCAT": 1,
+    # "AAAAAATCGTTTCGGGATGATGCATAGCATA": 1,
+    # "AAAAATCGTTTCGGGATGATGCATAGCATAT": 1,
     #        }
-    #alignSequence(list(d.keys())[0], d, args.kmersize)
+    # alignSequence(list(d.keys())[0], d, args.kmersize)
