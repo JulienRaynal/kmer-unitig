@@ -67,7 +67,6 @@ def cleanReads(records: iter, outputfile_name: str, min_quality: int = 30, kmer_
     good_reads: list = []
     read_count: int = 0
     for record in records:
-        print(record.letter_annotations["phred_quality"])
         if statistics.mean(record.letter_annotations["phred_quality"]) >= 30:
             good_reads.append(record)
             read_count += 1  # Doing this as we can't get the length of an iterable
@@ -138,14 +137,7 @@ def jellyfish_kmer(output_file: str, kmer_size: int) -> Dict[str, int]:
 
 def alignSequence(kmer: str, ordered_dict: Dict[str, int], kmer_size):
     """
-    Align two kmers by looking at their sequence or the reverse complements of each of them
-
-    Looks the 4 possibilities (A, T, C, G) in the dict of kmers
-    If more than two possibilities exists then we stop looking on the righ as we have found a crossing
-    
-
-    4 options:
-        The same suffix as the given prefix but having at the end either A, T, C or G
+    Calls the search algorithm on the right and then the left side of the given kmer
     
     Parameters
     ----------
@@ -160,61 +152,28 @@ def alignSequence(kmer: str, ordered_dict: Dict[str, int], kmer_size):
     stop: bool = False
 
     print(f"Searching the kmer aligning with {kmer} on the right")
-    buildUnitig(unitig, ordered_dict, kmer_size)
-    # while (stop == False):
-    #    suffix = unitig[len(unitig) - kmer_size + 1:]
-    #    complementary_strings: List[str] = []
-    #    values: List[int] = []
-    #    # Sens sequence
-    #    for char in possibilities:
-    #        kmer_to_search: str = suffix+char
-    #        value: int = ordered_dict.get(kmer_to_search)
-    #        if value is not None:
-    #            complementary_strings.append(kmer_to_search)
-    #            values.append(value)
-
-    #        # antisens
-    #        complement = computeReverseComplement(suffix)
-    #        reverse_kmer_to_search: str = char + complement
-    #        value: int = ordered_dict.get(reverse_kmer_to_search)
-    #        if value is not None:
-    #            complementary_strings.append(computeReverseComplement(reverse_kmer_to_search))
-    #            values.append(value)
-
-    #    if (len(complementary_strings) != 1): 
-    ##        print(f"Found {len(complementary_strings)} values")
-    # #       for string in complementary_strings:
-    #  #          print(string)
-    #   #     print("STOPPING")
-    #        stop = True
-    #    else:
-    #        unitig += complementary_strings[0][-1]
-    #        print(f"Added a char to unitig: {unitig}")
-    #        avg_support = (avg_support + values[0]) / 2
-
-    # stop = False
-    # while (stop == False):
-    #    prefix = unitig[kmer_size - 1]
-    #    complementary_strings: List[str] = []
-    #    values: List[int] = 0
-    #    # Sens séquence
-    #    for char in possibilities:
-    #        kmer_to_search: str = char + prefix
-    #        value: int = ordered_dict.get(kmer_to_search)
-    #        if value:
-    #            complementary_strings.append(kmer_to_search)
-    #            values.append(value)
-
-    #    if (len(complementary_strings) != 1):
-    #        stop=True
-    #    else:
-    #        unitig = complementary_strings[0][0] + unitig
-    #        avg_support = (avg_support + values[0]) / 2
-
-    # print(unitig)
+    unitig = buildUnitig(unitig, ordered_dict, kmer_size)
+    buildUnitig(unitig, ordered_dict, kmer_size, right_search=False)
 
 
 def buildUnitig(unitig: str, ordered_dict: Dict[str, int], kmer_size: int, right_search=True) -> str:
+    """
+    Builds a unitig based on the kmer found in the dict built by jellifish
+    Parameters
+    ----------
+    unitig
+        A kmer to begin the unitig
+    ordered_dict
+        A dict holding all the kmer and the number of times it has appeared in jellyfish
+    kmer_size
+        The size of the kmer
+    right_search
+        If it tries to build the right side of the unitig
+
+    Returns
+    -------
+    str
+    """
     stop: bool = False
     avg_support: float = 0
 
@@ -228,14 +187,14 @@ def buildUnitig(unitig: str, ordered_dict: Dict[str, int], kmer_size: int, right
             substring: str = unitig[:kmer_size - 1]
 
         reverse_complement_substring: str = computeReverseComplement(substring)
-
+        # Check if another kmer can be added depending on the 4 possibilities
         for char in ['A', 'T', 'C', 'G']:
             kmer_to_search: str = substring + char if right_search else char + substring
             reverse_to_search: str = char + reverse_complement_substring if right_search else reverse_complement_substring + char
             findComplementaryKmer(kmer_to_search, ordered_dict, char, complementary_chars, kmer_counts)
-            findComplementaryKmer(reverse_to_search, ordered_dict, char, complementary_chars, kmer_counts)
-
-        if len(kmer_counts) != 1:
+            findComplementaryKmer(reverse_to_search, ordered_dict, char, complementary_chars, kmer_counts, reverse=True)
+        # If there's more than one option we've reached a crossroad and we stop
+        if len(complementary_chars) != 1:
             stop = True
         else:
             unitig = unitig + complementary_chars[0] if right_search else complementary_chars[0] + unitig
@@ -243,16 +202,20 @@ def buildUnitig(unitig: str, ordered_dict: Dict[str, int], kmer_size: int, right
             avg_support = (avg_support + kmer_counts[0] / 2)
 
     print(unitig)
+    return unitig
 
 def findComplementaryKmer(kmer_to_search: str, ordered_dict: Dict[str, int], char: str,
-                          complementary_chars: List[str], kmer_counts: List[int]):
+                          complementary_chars: List[str], kmer_counts: List[int], reverse=False):
     """
     Manages finding in a dict the occurences of a given kmer and add the data to the right list
     """
     kmer_count: int = ordered_dict.get(kmer_to_search)
     if kmer_count is not None:
         kmer_counts.append(kmer_count)
-        complementary_chars.append(char)
+        if reverse:
+            complementary_chars.append(computeReverseComplement(char))
+        else:
+            complementary_chars.append(char)
 
 
 def computeReverseComplement(kmer: str) -> str:
