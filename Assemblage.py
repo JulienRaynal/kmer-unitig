@@ -3,7 +3,10 @@ import sys
 import argparse
 import statistics
 from Bio import SeqIO
-from typing import Dict, List
+from typing import Dict, List, Tuple
+
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
 
 
 def getFileExtension(path: str) -> str:
@@ -130,15 +133,16 @@ def jellyfish_kmer(output_file: str, kmer_size: int) -> Dict[str, int]:
     print("Creating the kmer dict")
     for record in SeqIO.parse(output_file, getFileExtension(output_file)):
         kmer_dict[str(record.seq)] = int(record.id)
-    od = dict(sorted(kmer_dict.items()))
-    print(f"Number of kmer made by jellyfish: {len(od)}")
-    return od
+    #od = dict(sorted(kmer_dict.items()))
+    print(f"Number of kmer made by jellyfish: {len(kmer_dict)}")
+    return kmer_dict
 
 
-def alignSequence(kmer: str, ordered_dict: Dict[str, int], kmer_size):
+def alignSequences(ordered_dict: Dict[str, int], kmer_size: int, unitig_size: int) -> List[Tuple[str,int]]:
     """
     Calls the search algorithm on the right and then the left side of the given kmer
-    
+
+    Cette fonction et celle en dessous peuvent être optimises mais par respect du temps et des regles je ne le ferais pas sur ce rendu
     Parameters
     ----------
     kmer: str
@@ -146,17 +150,41 @@ def alignSequence(kmer: str, ordered_dict: Dict[str, int], kmer_size):
     ordered_dict: Dict[str, int]
         A dict of all the kmers as keys and their occurences as values
     """
-    unitig: str = kmer
-    possibilities: List[str] = 'A', 'T', 'C', 'G'
-    avg_support: int = 0
-    stop: bool = False
+    print("Building unitigs ... Please wait")
+    unitigs: List[Tuple[str, int]] = []  # A list containing a dict with as key the full unitig and as value the average kmer count along the path
+    for key, value in ordered_dict.copy().items():
+        unitig: str = key
+        support = value
+        keys_to_delete: List[str] = []
+        unitigR = buildUnitig(unitig, ordered_dict, kmer_size)
+        unitigL = buildUnitig(unitig, ordered_dict, kmer_size, right_search=False)
+        for i in range(0, len(unitigR), 1):
+            unitig = unitig + unitigR[i][-1]
+            if ordered_dict.get(unitigR[i]):
+                existing_key = unitigR[i]
+            else:
+                existing_key = computeReverseComplement(unitigR[i])
+            support = (support + ordered_dict.get(existing_key))/2
+            keys_to_delete.append(existing_key)
+        for i in range(len(unitigL) - 1, -1, -1):
+            unitig = unitigL[i][0] + unitig
+            if ordered_dict.get(unitigL[i]):
+                existing_key = unitigL[i]
+            else:
+                existing_key = computeReverseComplement(unitigL[i])
+            support = (support + ordered_dict.get(existing_key)) / 2
+            keys_to_delete.append(existing_key)
 
-    print(f"Searching the kmer aligning with {kmer} on the right")
-    unitig = buildUnitig(unitig, ordered_dict, kmer_size)
-    buildUnitig(unitig, ordered_dict, kmer_size, right_search=False)
+        if len(unitig) >= unitig_size:
+            unitigs.append((unitig, support))
+            for key in keys_to_delete:
+                del ordered_dict[key]
+        else:
+            continue
+    return unitigs
 
 
-def buildUnitig(unitig: str, ordered_dict: Dict[str, int], kmer_size: int, right_search=True) -> str:
+def buildUnitig(unitig: str, ordered_dict: Dict[str, int], kmer_size: int, right_search=True) -> List[str]:
     """
     Builds a unitig based on the kmer found in the dict built by jellifish
     Parameters
@@ -176,15 +204,16 @@ def buildUnitig(unitig: str, ordered_dict: Dict[str, int], kmer_size: int, right
     """
     stop: bool = False
     avg_support: float = 0
-
+    unitig_list = [unitig]
     while not stop:
         complementary_chars: List[str] = []
         kmer_counts: List[int] = []
 
-        if right_search is True:  # get the prefix
-            substring: str = unitig[len(unitig) - kmer_size + 1:]
+        if right_search is True:
+            # get the prefix
+            substring: str = unitig_list[-1][1:]
         else:  # get the suffix
-            substring: str = unitig[:kmer_size - 1]
+            substring: str = unitig_list[0][:-1]
 
         reverse_complement_substring: str = computeReverseComplement(substring)
         # Check if another kmer can be added depending on the 4 possibilities
@@ -197,12 +226,17 @@ def buildUnitig(unitig: str, ordered_dict: Dict[str, int], kmer_size: int, right
         if len(complementary_chars) != 1:
             stop = True
         else:
-            unitig = unitig + complementary_chars[0] if right_search else complementary_chars[0] + unitig
-            print(f"Added a char to unitig: {unitig}")
+            if right_search:
+                unitig_list.append(substring + complementary_chars[0])
+            else:
+                unitig_list.insert(0, complementary_chars[0] + substring)
             avg_support = (avg_support + kmer_counts[0] / 2)
 
-    print(unitig)
-    return unitig
+    if right_search:
+        unitig_list = unitig_list[1:]
+    else:
+        unitig_list = unitig_list[:-1]
+    return unitig_list
 
 def findComplementaryKmer(kmer_to_search: str, ordered_dict: Dict[str, int], char: str,
                           complementary_chars: List[str], kmer_counts: List[int], reverse=False):
@@ -242,6 +276,28 @@ def computeReverseComplement(kmer: str) -> str:
 
     return complement
 
+def unitigs_to_fasta(unitigs: List[Tuple[str, int]]) -> None:
+    """
+    Write the unitigs as fasta
+    Parameters
+    ----------
+    unitigs: List[Tuple[str, int]]
+        A list containing tuples of sequences and average support
+
+    Returns
+    -------
+    None
+    """
+    records: List[SeqRecord] = []
+    for idx, unitig in enumerate(unitigs):
+        record = SeqRecord(
+            Seq(unitig[0]),
+            id=f"unitig_{idx}_{len(unitig[0])}_{unitig[1]}",
+            description=""
+        )
+        records.append(record)
+
+    SeqIO.write(records, "unitigs.fasta", "fasta")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Kmer Grapher")
@@ -260,24 +316,16 @@ if __name__ == "__main__":
     #       Sorting reads       #
     #############################
     reads: iter = getReads(args.inputfilename)
-    reads: list = cleanReads(reads, args.outputfilename, args.minreadquality, args.kmersize)
+    if (args.inputfilename.split(".")[-1] == "fq" or args.inputfilename.split(".")[-1] == "fastq"):
+        reads: list = cleanReads(reads, args.outputfilename, args.minreadquality, args.kmersize)
 
     #############################
     #       Creating kmer       #
     #############################
-    ordered_dict: Dict[str, int] = jellyfish_kmer(args.outputfilename, args.kmersize)
+    kmer_dict: Dict[str, int] = jellyfish_kmer(args.outputfilename, args.kmersize)
 
     #############################
     #       Building unitig     #
     #############################
-    unitigs: List[Dict[
-        str, int]] = []  # A list containing a dict with as key the full unitig and as value the average kmer count along the path
-    for i in range(len(list(ordered_dict.keys()))):
-        alignSequence(list(ordered_dict.keys())[i], ordered_dict, args.kmersize)
-
-    # d = dict = {
-    # "AAAAAAATCGTTTCGGGATGATGCATAGCAT": 1,
-    # "AAAAAATCGTTTCGGGATGATGCATAGCATA": 1,
-    # "AAAAATCGTTTCGGGATGATGCATAGCATAT": 1,
-    #        }
-    # alignSequence(list(d.keys())[0], d, args.kmersize)
+    unitigs = alignSequences(kmer_dict, args.kmersize, args.unitigsize)
+    unitigs_to_fasta(unitigs)
